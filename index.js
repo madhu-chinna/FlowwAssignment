@@ -33,7 +33,7 @@ const createTables = async () => {
   `);
 };
 
-
+ 
 const initializeDBAndServer = async () => {
   try {
     db = await open({
