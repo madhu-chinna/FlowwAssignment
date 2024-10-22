@@ -8,9 +8,31 @@ const {open} = require('sqlite')
 const app = express()
 const PORT = 3008;
 
-const dbPath = path.join(__dirname, 'smokeTrees.db')
+const dbPath = path.join(__dirname, 'floww.db')
 
 let db = null
+
+
+const createTables = async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT CHECK(type IN ('income', 'expense')) NOT NULL
+    );
+  
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT CHECK(type IN ('income', 'expense')) NOT NULL,
+      category INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      date TEXT NOT NULL,
+      description TEXT,
+      FOREIGN KEY (category) REFERENCES categories(id)
+    );
+  `);
+};
+
 
 const initializeDBAndServer = async () => {
   try {
@@ -18,6 +40,10 @@ const initializeDBAndServer = async () => {
       filename: dbPath,
       driver: sqlite3.Database,
     })
+
+    // Calling createTables after database connection is established
+    await createTables();
+
     app.listen(PORT, () => {
       console.log(`Server Running at http://localhost:${PORT}/`)
     })
@@ -32,133 +58,125 @@ initializeDBAndServer()
 // Middleware to parse JSON bodies
 app.use(express.json())
 
+// For Adding a new transaction (income or expense)
+app.post('/transactions', async (req, res) => {
+  const { type, category, amount, date, description } = req.body;
 
-
-// Function to create User and Address tables
-const createTables = async () => {
-    const userTableQuery = `
-      CREATE TABLE IF NOT EXISTS User (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL
-      );`;
-  
-    const addressTableQuery = `
-      CREATE TABLE IF NOT EXISTS Address (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId INTEGER,
-        address TEXT NOT NULL,
-        FOREIGN KEY (userId) REFERENCES User(id) ON DELETE CASCADE
-      );`;
-  
-    try {
-      await db.run(userTableQuery);
-      await db.run(addressTableQuery);
-      console.log('Tables "User" and "Address" created or already exist');
-    } catch (err) {
-      console.error('Error creating tables:', err.message);
-    }
-  };
-  
-  // Endpoint to create the tables
-  app.get('/createtables', async (req, res) => {
-    await createTables();
-    res.send('Tables created successfully');
-  });
-
-
-
-
-// POST endpoint to register a user
-app.post('/register', async (req, res) => {
-    const { name, address } = req.body;
-  
-    if (!name || !address) {
-      return res.status(400).send('Name and address are required');
-    }
-  
-    try {
-      const userInsertQuery = `
-        INSERT INTO User (name)
-        VALUES (?);
-      `;
-      const result = await db.run(userInsertQuery,[name]);
-
-      // Get the newly created user's ID
-      const userId = result.lastID;
-  
-      const addressInsertQuery = `
-        INSERT INTO Address (userId, address)
-        VALUES (?, ?);
-      `;
-      const result2 =  await db.run(addressInsertQuery,[userId,address]);
-  
-      res.status(201).send('User and address registered successfully');
-    } catch (err) {
-      console.error('Error registering user:', err.message);
-      res.status(500).send('Internal Server Error');
-    }
-  });
-
-
-
-
-// I have written the below code for my testing purpose on Postman.
-// GET endpoint to fetch all users
-app.get('/users', async (req, res) => {
-    try {
-      const getUsersQuery = `
-        SELECT * FROM User LEFT JOIN Address;
-      `;
-      const users = await db.all(getUsersQuery);
-      res.status(200).json(users)
-    } catch (err) {
-      console.error('Error fetching users:', err.message);
-      res.status(500).send('Internal Server Error');
-    }
-  });
-// GET endpoint to fetch all useraAddress
-app.get('/getaddress', async (req, res) => {
-    try {
-      const getUsersQuery = `
-        SELECT * FROM Address;
-      `;
-      const users = await db.all(getUsersQuery);
-      res.status(200).json(users);
-    } catch (err) {
-      console.error('Error fetching Address:', err.message);
-      res.status(500).send('Internal Server Error');
-    }
-  });
-
-// DELETE endpoint to delete all rows from User and Address tables
-app.delete('/deleteall', async (req, res) => {
   try {
-    const deleteAddressesQuery = `DELETE FROM Address;`;
-    const deleteUsersQuery = `DELETE FROM User;`;
-
-    await db.run(deleteAddressesQuery);
-    await db.run(deleteUsersQuery);
-
-    res.status(200).send('All rows deleted from User and Address tables');
-  } catch (err) {
-    console.error('Error deleting rows:', err.message);
-    res.status(500).send('Internal Server Error');
+    const result = await db.run(
+      `INSERT INTO transactions (type, category, amount, date, description) 
+      VALUES (?, ?, ?, ?, ?)`, 
+      [type, category, amount, date, description]
+    );
+    res.status(201).send({ transactionId: result.lastID });
+  } catch (error) {
+    res.status(400).send({ error: error.message });
   }
 });
 
-// DELETE endpoint to drop User and Address tables
-app.delete('/droptables', async (req, res) => {
+// For Retrieving all transactions
+app.get('/transactions', async (req, res) => {
   try {
-    const dropAddressTableQuery = `DROP TABLE IF EXISTS Address;`;
-    const dropUserTableQuery = `DROP TABLE IF EXISTS User;`;
+    const transactions = await db.all(`SELECT * FROM transactions`);
+    res.send(transactions);
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+});
 
-    await db.run(dropAddressTableQuery);
-    await db.run(dropUserTableQuery);
+// For Retrieving a transaction by ID
+app.get('/transactions/:id', async (req, res) => {
+  const { id } = req.params;
 
-    res.status(200).send('Tables "User" and "Address" dropped successfully');
-  } catch (err) {
-    console.error('Error dropping tables:', err.message);
-    res.status(500).send('Internal Server Error');
+  try {
+    const transaction = await db.get(`SELECT * FROM transactions WHERE id = ?`, [id]);
+    if (transaction) {
+      res.send(transaction);
+    } else {
+      res.status(404).send({ message: "Transaction not found" });
+    }
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+});
+
+
+// For Updating a transaction by ID
+app.put('/transactions/:id', async (req, res) => {
+  const { id } = req.params;
+  const { type, category, amount, date, description } = req.body;
+
+  try {
+    const result = await db.run(
+      `UPDATE transactions 
+       SET type = ?, category = ?, amount = ?, date = ?, description = ? 
+       WHERE id = ?`, 
+      [type, category, amount, date, description, id]
+    );
+    if (result.changes > 0) {
+      res.send({ message: "Transaction updated successfully" });
+    } else {
+      res.status(404).send({ message: "Transaction not found" });
+    }
+  } catch (error) {
+    res.status(400).send({ error: error.message });
+  }
+});
+
+
+// For Deleting a transaction by ID
+app.delete('/transactions/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await db.run(`DELETE FROM transactions WHERE id = ?`, [id]);
+    if (result.changes > 0) {
+      res.send({ message: "Transaction deleted successfully" });
+    } else {
+      res.status(404).send({ message: "Transaction not found" });
+    }
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+});
+
+// For Retrieving the summary of transactions
+app.get('/summary', async (req, res) => {
+  const { startDate, endDate, category } = req.query;
+
+  let filters = [];
+  let params = [];
+
+  if (startDate) {
+    filters.push("date >= ?");
+    params.push(startDate);
+  }
+  if (endDate) {
+    filters.push("date <= ?");
+    params.push(endDate);
+  }
+  if (category) {
+    filters.push("category = ?");
+    params.push(category);
+  }
+
+  const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+  try {
+    const income = await db.get(`SELECT SUM(amount) AS total_income FROM transactions WHERE type = 'income' ${whereClause}`, params);
+    const expenses = await db.get(`SELECT SUM(amount) AS total_expenses FROM transactions WHERE type = 'expense' ${whereClause}`, params);
+
+    const totalIncome = income.total_income || 0;
+    const totalExpenses = expenses.total_expenses || 0;
+    const balance = totalIncome - totalExpenses;
+
+    res.send({
+      totalIncome,
+      totalExpenses,
+      balance
+    });
+  } catch (error) {
+    res.status(500).send({ error: error.message });
   }
 });
 
